@@ -27,7 +27,7 @@ if(NX)
     set(GW3_ICON ${CMAKE_SOURCE_DIR}/icon.jpg)
   endif()
   add_custom_command(TARGET gw3nx POST_BUILD
-    COMMAND ${TOOLS}/nacptool --create "Geometry Wars 3: Dimensions" "gw3nx" "0.28" ${CMAKE_BINARY_DIR}/gw3nx.nacp
+    COMMAND ${TOOLS}/nacptool --create "Geometry Wars 3: Dimensions" "gw3nx" "0.29" ${CMAKE_BINARY_DIR}/gw3nx.nacp
     COMMAND ${TOOLS}/elf2nro $<TARGET_FILE:gw3nx> ${CMAKE_BINARY_DIR}/gw3nx.nro --nacp=${CMAKE_BINARY_DIR}/gw3nx.nacp $<$<BOOL:${GW3_ICON}>:--icon=${GW3_ICON}>
     COMMENT "Packing gw3nx.nro")
 elseif(GW3_HEADLESS)
