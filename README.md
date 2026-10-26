@@ -122,7 +122,7 @@ Everything lives in `sdmc:/switch/gw3/`:
 
 ### Get the source and dependencies
 ```sh
-git clone https://github.com/<you>/gw3nx && cd gw3nx
+git clone https://github.com/Theonesabove/gw3nx && cd gw3nx
 tools/fetch_deps.sh   # dynarmic at the pinned commit, with patches/dynarmic-switch.patch applied
 ```
 
