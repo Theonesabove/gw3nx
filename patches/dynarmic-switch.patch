@@ -1,0 +1,212 @@
+diff --git a/src/dynarmic/backend/arm64/address_space.cpp b/src/dynarmic/backend/arm64/address_space.cpp
+index 2c7ae77..3f078f3 100644
+--- a/src/dynarmic/backend/arm64/address_space.cpp
++++ b/src/dynarmic/backend/arm64/address_space.cpp
+@@ -23,7 +23,7 @@ namespace Dynarmic::Backend::Arm64 {
+ AddressSpace::AddressSpace(size_t code_cache_size)
+         : code_cache_size(code_cache_size)
+         , mem(code_cache_size)
+-        , code(mem.ptr(), mem.ptr())
++        , code(mem.wptr(), mem.ptr())
+         , fastmem_manager(exception_handler) {
+     ASSERT_MSG(code_cache_size <= 128 * 1024 * 1024, "code_cache_size > 128 MiB not currently supported");
+ 
+@@ -109,6 +109,8 @@ size_t AddressSpace::GetRemainingSize() {
+ 
+ EmittedBlockInfo AddressSpace::Emit(IR::Block block) {
+     if (GetRemainingSize() < 1024 * 1024) {
++        std::fprintf(stderr, "dynarmic: code cache full (%zu MiB), clearing\n", code_cache_size >> 20);
++        std::fflush(stderr);
+         ClearCache();
+     }
+ 
+@@ -136,7 +138,7 @@ void AddressSpace::Link(EmittedBlockInfo& block_info) {
+     using namespace oaknut::util;
+ 
+     for (auto [ptr_offset, target] : block_info.relocations) {
+-        CodeGenerator c{mem.ptr(), mem.ptr()};
++        CodeGenerator c{mem.wptr(), mem.ptr()};
+         c.set_xptr(reinterpret_cast<u32*>(block_info.entry_point + ptr_offset));
+ 
+         switch (target) {
+@@ -276,7 +278,7 @@ void AddressSpace::LinkBlockLinks(const CodePtr entry_point, const CodePtr targe
+     using namespace oaknut::util;
+ 
+     for (auto [ptr_offset, type] : block_relocations_list) {
+-        CodeGenerator c{mem.ptr(), mem.ptr()};
++        CodeGenerator c{mem.wptr(), mem.ptr()};
+         c.set_xptr(reinterpret_cast<u32*>(entry_point + ptr_offset));
+ 
+         switch (type) {
+diff --git a/src/dynarmic/common/spin_lock_arm64.cpp b/src/dynarmic/common/spin_lock_arm64.cpp
+index ccf807e..8b6a75a 100644
+--- a/src/dynarmic/common/spin_lock_arm64.cpp
++++ b/src/dynarmic/common/spin_lock_arm64.cpp
+@@ -4,6 +4,11 @@
+  */
+ 
+ #include <mutex>
++#ifdef __SWITCH__
++#include <switch.h>
++#else
++#include <sched.h>
++#endif
+ 
+ #include <oaknut/code_block.hpp>
+ #include <oaknut/oaknut.hpp>
+@@ -54,7 +59,7 @@ SpinLockImpl impl;
+ 
+ SpinLockImpl::SpinLockImpl()
+         : mem{4096}
+-        , code{mem.ptr(), mem.ptr()} {}
++        , code{mem.wptr(), mem.ptr()} {}
+ 
+ void SpinLockImpl::Initialize() {
+     mem.unprotect();
+@@ -73,14 +78,26 @@ void SpinLockImpl::Initialize() {
+ 
+ }  // namespace
+ 
++// gw3nx: a plain atomic spinlock that yields. The original went through std::call_once (a global
++// mutex in newlib's libstdc++) on every Lock/Unlock and busy-waited forever; on Horizon, which never
++// preempts equal-priority threads, the lock holder could then never run to release it -> deadlock.
+ void SpinLock::Lock() {
+-    std::call_once(flag, &SpinLockImpl::Initialize, impl);
+-    impl.lock(&storage);
++    int spins = 0;
++    while (__atomic_exchange_n(&storage, 1, __ATOMIC_ACQUIRE)) {
++        while (__atomic_load_n(&storage, __ATOMIC_RELAXED)) {
++            if (++spins > 64) {
++#ifdef __SWITCH__
++                svcSleepThread(-1);   // yield, allow migration
++#else
++                sched_yield();
++#endif
++            }
++        }
++    }
+ }
+ 
+ void SpinLock::Unlock() {
+-    std::call_once(flag, &SpinLockImpl::Initialize, impl);
+-    impl.unlock(&storage);
++    __atomic_store_n(&storage, 0, __ATOMIC_RELEASE);
+ }
+ 
+ }  // namespace Dynarmic
+diff --git a/externals/oaknut/include/oaknut/code_block.hpp b/externals/oaknut/include/oaknut/code_block.hpp
+index bfa87d9..c72fedb 100644
+--- a/externals/oaknut/include/oaknut/code_block.hpp
++++ b/externals/oaknut/include/oaknut/code_block.hpp
+@@ -2,6 +2,94 @@
+ // SPDX-License-Identifier: MIT
+ 
+ #pragma once
++#if defined(__SWITCH__)
++// Horizon: code is written through an RW alias and executed from an RX alias (libnx Jit, CodeMemory mode).
++// The kernel has few CodeMemory objects to hand out, so every CodeBlock is a slice of one shared pool.
++#include <switch.h>
++#include <cstdio>
++#include <mutex>
++namespace oaknut {
++class CodeBlock {
++public:
++    static constexpr std::size_t POOL_SIZE = 448u << 20;
++    explicit CodeBlock(std::size_t size)
++    {
++        static Jit pool;
++        static std::size_t used = 0;
++        static std::mutex mx;
++        std::lock_guard<std::mutex> lk(mx);
++        if (!used) {
++            Result rc = jitCreate(&pool, POOL_SIZE);
++            if (R_FAILED(rc)) {
++                fprintf(stderr, "oaknut: jitCreate(%zu MiB) failed rc=0x%x\n", POOL_SIZE >> 20, rc);
++                fflush(stderr);
++                throw std::bad_alloc{};
++            }
++            jitTransitionToExecutable(&pool);
++            fprintf(stderr, "oaknut: JIT pool rx=%p-%p\n", jitGetRxAddr(&pool), (char*)jitGetRxAddr(&pool) + POOL_SIZE);
++            used = 0x1000;  // keep offset 0 free so "used == 0" means uninitialised
++        }
++        size = (size + 0xFFF) & ~std::size_t(0xFFF);
++        if (used + size > POOL_SIZE) {
++            fprintf(stderr, "oaknut: JIT pool exhausted (%zu MiB used, %zu KiB more requested)\n", used >> 20, size >> 10);
++            fflush(stderr);
++            throw std::bad_alloc{};
++        }
++        m_rw = (std::uint8_t*)jitGetRwAddr(&pool) + used;
++        m_rx = (std::uint8_t*)jitGetRxAddr(&pool) + used;
++        m_size = size;
++        used += size;  // ponytail: slices are never returned (JITs live as long as their thread)
++    }
++    CodeBlock(const CodeBlock&) = delete;
++    CodeBlock& operator=(const CodeBlock&) = delete;
++    std::uint32_t* ptr() const { return (std::uint32_t*)m_rx; }
++    std::uint32_t* wptr() const { return (std::uint32_t*)m_rw; }
++    void protect() {}
++    void unprotect() {}
++    void invalidate(std::uint32_t* mem, std::size_t size)
++    {
++        armDCacheFlush(m_rw + ((std::uint8_t*)mem - m_rx), size);
++        armICacheInvalidate(mem, size);
++    }
++    void invalidate_all() { invalidate(ptr(), m_size); }
++private:
++    std::uint8_t* m_rw;
++    std::uint8_t* m_rx;
++    std::size_t m_size;
++};
++}  // namespace oaknut
++#elif defined(GW3_DUAL_MAP_TEST)
++// Test-only: mimic Horizon's split RW/RX JIT mapping on Linux (memfd mapped twice).
++#include <sys/mman.h>
++#include <unistd.h>
++namespace oaknut {
++class CodeBlock {
++public:
++    explicit CodeBlock(std::size_t size) : m_size(size)
++    {
++        int fd = memfd_create("oaknut", 0);
++        if (fd < 0 || ftruncate(fd, size)) throw std::bad_alloc{};
++        m_w = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++        m_x = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_EXEC, MAP_SHARED, fd, 0);
++        close(fd);
++        if (m_w == MAP_FAILED || m_x == MAP_FAILED) throw std::bad_alloc{};
++    }
++    ~CodeBlock() { munmap(m_w, m_size); munmap(m_x, m_size); }
++    CodeBlock(const CodeBlock&) = delete;
++    CodeBlock& operator=(const CodeBlock&) = delete;
++    std::uint32_t* ptr() const { return m_x; }
++    std::uint32_t* wptr() const { return m_w; }
++    void protect() {}
++    void unprotect() {}
++    void invalidate(std::uint32_t* mem, std::size_t size) { __builtin___clear_cache((char*)mem, (char*)mem + size); }
++    void invalidate_all() { invalidate(m_x, m_size); }
++private:
++    std::size_t m_size;
++    std::uint32_t* m_w;
++    std::uint32_t* m_x;
++};
++}  // namespace oaknut
++#else
+ 
+ #include <algorithm>
+ #include <cstddef>
+@@ -70,6 +158,11 @@ public:
+         return m_memory;
+     }
+ 
++    std::uint32_t* wptr() const
++    {
++        return m_memory;
++    }
++
+     void protect()
+     {
+ #if defined(__APPLE__) && !TARGET_OS_IPHONE
+@@ -141,3 +234,4 @@ protected:
+ };
+ 
+ }  // namespace oaknut
++#endif  // __SWITCH__

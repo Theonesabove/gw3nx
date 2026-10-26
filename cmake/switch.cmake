@@ -1,0 +1,27 @@
+# CMake toolchain for Nintendo Switch homebrew (devkitA64 + libnx + portlibs).
+# Generic system name -> dynarmic picks its generic exception handler (no fastmem, no signals).
+set(CMAKE_SYSTEM_NAME Generic)
+set(CMAKE_SYSTEM_PROCESSOR aarch64)
+set(DEVKITPRO $ENV{DEVKITPRO})
+if(NOT DEVKITPRO)
+  set(DEVKITPRO /opt/devkitpro)
+endif()
+set(NX TRUE)
+set(CMAKE_C_COMPILER ${DEVKITPRO}/devkitA64/bin/aarch64-none-elf-gcc)
+set(CMAKE_CXX_COMPILER ${DEVKITPRO}/devkitA64/bin/aarch64-none-elf-g++)
+set(CMAKE_ASM_COMPILER ${DEVKITPRO}/devkitA64/bin/aarch64-none-elf-gcc)
+set(CMAKE_AR ${DEVKITPRO}/devkitA64/bin/aarch64-none-elf-gcc-ar CACHE FILEPATH "")
+set(CMAKE_RANLIB ${DEVKITPRO}/devkitA64/bin/aarch64-none-elf-gcc-ranlib CACHE FILEPATH "")
+
+set(ARCH_FLAGS "-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE -ftls-model=local-exec -ffunction-sections -fdata-sections -D__SWITCH__ -D_GNU_SOURCE")
+set(CMAKE_C_FLAGS_INIT "${ARCH_FLAGS} -I${DEVKITPRO}/libnx/include -I${DEVKITPRO}/portlibs/switch/include")
+set(CMAKE_CXX_FLAGS_INIT "${ARCH_FLAGS} -I${DEVKITPRO}/libnx/include -I${DEVKITPRO}/portlibs/switch/include")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-specs=${DEVKITPRO}/libnx/switch.specs -L${DEVKITPRO}/libnx/lib -L${DEVKITPRO}/portlibs/switch/lib")
+
+set(CMAKE_FIND_ROOT_PATH ${DEVKITPRO}/devkitA64 ${DEVKITPRO}/libnx ${DEVKITPRO}/portlibs/switch)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+set(BUILD_SHARED_LIBS OFF CACHE INTERNAL "")
