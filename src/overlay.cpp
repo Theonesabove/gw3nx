@@ -30,19 +30,20 @@ const Preset kPresets[] = {
 };
 const int kNumPresets = sizeof kPresets / sizeof kPresets[0];
 
-// Achievements, in the game's E_Achievement order (= Google Play IDs ...EAIQAA..HQ, 0..29). Names and
-// Android thresholds from the Google Play listing; the two co-op ones were hidden there.
+// Achievements, in the game's E_Achievement order: the enum's names are in the game's reflection data
+// (Xt::Annotation<E_Achievement>::fields: LevelUpADrone, LevelAllDrones, KillOneHundredEnemiesWithOneBomb,
+// EarnFirstGoldMedal, ...; 30-33 are online-only). Names and Android thresholds from the Google Play listing.
 struct Ach { const char* name; const char* desc; };
 const Ach kAch[] = {
+    {"Specialist", "Upgrade any one Drone to max level"},
+    {"Maximise", "Upgrade all 5 Drones to max level"},
+    {"Boom", "Kill 100 enemies with a single Smart Bomb"},
     {"First Step", "Earn 3 stars on any Adventure Mode level"},
     {"Geometry Warrior", "Earn 3 stars on all 50 Adventure Mode levels"},
     {"Keen Adventurer", "Defeat the Topaz boss in Adventure Mode"},
-    {"Specialist", "Upgrade any one Drone to max level"},
-    {"Maximise", "Upgrade all 5 Drones to max level"},
     {"Millionaire", "Score 1 million on any Adventure Mode level"},
     {"Multi Millionaire", "Score 100 million on any Adventure Mode level"},
     {"Geomtastic", "Reach a x1000 multiplier on any Adventure level"},
-    {"Boom", "Kill 100 enemies with a single Smart Bomb"},
     {"Kill Them All", "Kill every enemy type at least once"},
     {"Dying Time", "Be killed by every enemy type at least once"},
     {"Powered Up", "Activate each Super State at least once"},

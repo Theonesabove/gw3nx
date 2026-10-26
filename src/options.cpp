@@ -198,6 +198,12 @@ void options_install(GLib* gw) {
     f_enter = sym("_ZN14C_MenuSequence9EnterMenuEi");
     g_menuseq = sym("gMenuSequence");
     if (gaddr a = sym("_ZN24CreditsConsoleControllerD2Ev")) hle_hook_pre(a, "CreditsConsoleController::~", [](Ctx&) { g_ach_mode = false; });
+    // CreditsConsoleController::Init -> LoadXML appends the XML's lines to the global creditsVector and
+    // never clears it, so a second visit still showed the first visit's list. Empty it (end = begin) first.
+    // ponytail: the dropped CreditLines aren't destroyed (a few KB leaked per visit)
+    static gaddr credits_vec = lib_sym(gw, "creditsVector");
+    if (gaddr a = sym("_ZN24CreditsConsoleController4InitEv"))
+        if (credits_vec) hle_hook_pre(a, "CreditsConsoleController::Init", [](Ctx&) { gref(credits_vec + 4) = gref(credits_vec); });
     // The main menu's Achievements tile asks SignedInToAppStore() first and otherwise shows "You need to be
     // signed in to Google Play". Answer yes at that one call site (1.3.0 build 101; checked before patching).
     if (gaddr show = sym("_ZN8Services18ShowAchievementsUIEi")) {
